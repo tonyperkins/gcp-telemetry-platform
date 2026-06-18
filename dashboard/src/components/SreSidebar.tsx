@@ -75,41 +75,6 @@ export function SreSidebar({
 }: Props) {
   const handleToggleCollapse = onToggleCollapse;
 
-  const [functionStatus, setFunctionStatus] = useState<'Running' | 'Stopped' | 'Unknown'>('Unknown');
-  const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
-
-  useEffect(() => {
-    if (isCollapsed) return;
-    fetch(`${API_BASE}/api/manage/status`)
-      .then(res => res.json())
-      .then(data => setFunctionStatus(data.state))
-      .catch(() => setFunctionStatus('Unknown'));
-  }, [isCollapsed, API_BASE]);
-
-  const handleFunctionStatusToggle = async (action: 'start' | 'stop') => {
-    const token = window.prompt(`Please enter the SRE Admin Token to ${action} the Cloud Scheduler ingestion pipeline:`);
-    if (!token) return;
-
-    try {
-      setFunctionStatus("Unknown"); // Optimistic loading
-      const response = await fetch(`${API_BASE}/api/manage/${action}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      if (!response.ok) {
-        window.alert(`Authorization Refused. The provided SRE token was invalid or missing.`);
-        return;
-      }
-      const data = await response.json();
-      setFunctionStatus(data.state);
-    } catch (err) {
-      window.alert("Failed to reach the Management API.");
-      setFunctionStatus("Unknown");
-    }
-  };
-
   const metricsHistory = useRef<MetricSnapshot[]>([]);
   const vehicleCountHistory = useRef<VehicleCountSnapshot[]>([]);
   const prevMetroCount = useRef(metroCount);
@@ -226,20 +191,7 @@ export function SreSidebar({
           gap: '8px',
         }}
       >
-        {!isCollapsed && (
-          <h2
-            style={{
-              margin: 0,
-              fontSize: '14px',
-              fontWeight: 600,
-              color: 'var(--text-primary)',
-              fontFamily: "'Inter', sans-serif",
-              flex: 1,
-            }}
-          >
-            SRE Dashboard
-          </h2>
-        )}
+        {!isCollapsed && <div style={{ flex: 1 }} />}
         {!isCollapsed && onOpenLogs && (
           <button
             onClick={onOpenLogs}
@@ -414,37 +366,7 @@ export function SreSidebar({
             {(onTogglePause || onClearData) && (
               <div style={{ padding: '12px', borderTop: '1px solid var(--border-light)', display: 'flex', gap: '8px', flexDirection: 'column' }}>
 
-                {/* Cloud Scheduler Ingestion Suspend */}
-                <div style={{ padding: '8px', background: 'var(--bg-active)', border: '1px solid var(--border-light)', borderRadius: '4px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '6px' }}>
-                    Ingestion Pipeline: {functionStatus}
-                  </div>
-                  {functionStatus !== 'Stopped' ? (
-                    <button
-                      onClick={() => handleFunctionStatusToggle('stop')}
-                      style={{
-                        background: '#EF4444', color: 'white', border: 'none', borderRadius: '4px',
-                        padding: '6px 12px', fontSize: '11px', fontWeight: 600, cursor: 'pointer',
-                        fontFamily: "'Inter', sans-serif", width: '100%',
-                      }}
-                    >
-                      ■ Suspend Active Ingestion
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handleFunctionStatusToggle('start')}
-                      style={{
-                        background: '#10B981', color: 'white', border: 'none', borderRadius: '4px',
-                        padding: '6px 12px', fontSize: '11px', fontWeight: 600, cursor: 'pointer',
-                        fontFamily: "'Inter', sans-serif", width: '100%',
-                      }}
-                    >
-                      ▶ Resume Ingestion Loop
-                    </button>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+                <div style={{ display: 'flex', gap: '6px' }}>
                   {onTogglePause && (
                     <button
                       onClick={onTogglePause}
@@ -561,6 +483,11 @@ function HealthCard({
     return `${Math.floor(age / 3600)}h ago`;
   };
 
+  const ageLabel =
+    lastChecked !== undefined ? `${lastChecked}s ago`
+    : lastIngest !== undefined ? getIngestAge()
+    : null;
+
   return (
     <div
       style={{
@@ -572,30 +499,23 @@ function HealthCard({
         fontFamily: "'Inter', sans-serif",
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-        <span style={{ fontSize: '18px' }}>{getStatusIcon()}</span>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{title}</div>
-          <div style={{ fontSize: '12px', color: '#6B7280' }}>{getStatusLabel()}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ fontSize: '16px' }}>{getStatusIcon()}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{title}</span>
+            {ageLabel && (
+              <span style={{ fontSize: '11px', color: '#9CA3AF', whiteSpace: 'nowrap' }}>{ageLabel}</span>
+            )}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
+            <span style={{ fontSize: '12px', color: '#6B7280' }}>{getStatusLabel()}</span>
+            {vehicleCount !== undefined && (
+              <span style={{ fontSize: '11px', color: '#9CA3AF', whiteSpace: 'nowrap' }}>{vehicleCount} Vehicles</span>
+            )}
+          </div>
         </div>
       </div>
-      {lastChecked !== undefined && (
-        <div style={{ fontSize: '11px', color: '#9CA3AF' }}>
-          Last checked {lastChecked}s ago
-        </div>
-      )}
-      {lastIngest !== undefined && (
-        <>
-          <div style={{ fontSize: '11px', color: '#9CA3AF' }}>
-            Last ingest: {getIngestAge()}
-          </div>
-          {vehicleCount !== undefined && (
-            <div style={{ fontSize: '11px', color: '#9CA3AF' }}>
-              {vehicleCount} vehicles active
-            </div>
-          )}
-        </>
-      )}
       {status === 'unhealthy' && onOpenRunbook && (
         <button
           onClick={() => onOpenRunbook(title.replace(' Feed', '').replace(' Health', 'API'))}

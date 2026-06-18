@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -105,18 +106,34 @@ func (h *ApiHandlers) GetHealth(w http.ResponseWriter, r *http.Request) {
 		"sources": map[string]interface{}{
 			"metro": map[string]interface{}{
 				"status":       "healthy",
-				"lastIngest":   time.Now().UTC().Format(time.RFC3339),
+				"lastIngest":   latestIngest(metro),
 				"vehicleCount": len(metro),
 			},
 			"flight": map[string]interface{}{
 				"status":       "healthy",
-				"lastIngest":   time.Now().UTC().Format(time.RFC3339),
+				"lastIngest":   latestIngest(flight),
 				"vehicleCount": len(flight),
 			},
 		},
 	}
 
 	json.NewEncoder(w).Encode(resp)
+}
+
+// latestIngest returns the most recent IngestedAt across the vehicles as an
+// RFC3339 string, or "" if none. This reflects the true age of the data rather
+// than the time the health endpoint was polled.
+func latestIngest(vehicles []data.Vehicle) string {
+	var latest time.Time
+	for _, v := range vehicles {
+		if v.IngestedAt.After(latest) {
+			latest = v.IngestedAt
+		}
+	}
+	if latest.IsZero() {
+		return ""
+	}
+	return latest.UTC().Format(time.RFC3339)
 }
 
 // GetOpenSkyStatus returns the status of the OpenSky ingestion pipeline.
@@ -202,11 +219,37 @@ func (h *ApiHandlers) DebugInspect(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// GetLogs serves the last N lines of the server log file for the dashboard log viewer.
-// The source parameter is accepted for UI routing but all server logs are served from
-// the same file; per-source log aggregation is not implemented yet.
+// logSourceKeywords maps a UI log "source" to the case-insensitive substrings used
+// to filter lines out of the single combined server log file. All server logs are
+// written to one file; the source tabs in the dashboard are filtered views of it.
+var logSourceKeywords = map[string][]string{
+	"metro":  {"metro", "gtfs", "capmetro"},
+	"flight": {"flight", "aircraft", "opensky", "flightpusher"},
+	"api":    {"[api]"},
+}
+
+// matchesLogSource reports whether a log line belongs to the given source.
+// A source with no keyword mapping (e.g. "all"/"dashboard") shows every line.
+func matchesLogSource(line, source string) bool {
+	keywords, ok := logSourceKeywords[source]
+	if !ok {
+		// Catch-all: show everything.
+		return true
+	}
+	lower := strings.ToLower(line)
+	for _, kw := range keywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// GetLogs serves the last N lines of the server log file, filtered by source.
+// All server components log to the same file; the source param selects a filtered
+// view (metro / flight / api / dashboard) rather than a separate file.
 func (h *ApiHandlers) GetLogs(w http.ResponseWriter, r *http.Request) {
-	_ = chi.URLParam(r, "source")
+	source := chi.URLParam(r, "source")
 
 	lines := r.URL.Query().Get("lines")
 	maxLines, err := strconv.Atoi(lines)
@@ -219,20 +262,35 @@ func (h *ApiHandlers) GetLogs(w http.ResponseWriter, r *http.Request) {
 		logFilePath = "/tmp/logs/out.log"
 	}
 
-	logLines, err := readLastLines(logFilePath, maxLines)
+	// Read a larger raw window so that after filtering by source we still have a
+	// useful number of lines to show.
+	rawLines, err := readLastLines(logFilePath, maxLines*20)
 	if err != nil {
 		log.Printf("[API] Failed to read log file %s: %v", logFilePath, err)
 		http.Error(w, `{"error": "failed to read logs"}`, http.StatusInternalServerError)
 		return
 	}
 
+	filtered := make([]string, 0, len(rawLines))
+	for _, line := range rawLines {
+		if matchesLogSource(line, source) {
+			filtered = append(filtered, line)
+		}
+	}
+
+	// Keep only the most recent maxLines after filtering.
+	totalMatched := len(filtered)
+	if len(filtered) > maxLines {
+		filtered = filtered[len(filtered)-maxLines:]
+	}
+
 	filename := filepath.Base(logFilePath)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"filename":   filename,
-		"lines":      logLines,
-		"count":      len(logLines),
-		"totalLines": len(logLines),
+		"lines":      filtered,
+		"count":      len(filtered),
+		"totalLines": totalMatched,
 	})
 }
 

@@ -7,7 +7,7 @@ interface LogData {
   totalLines: number;
 }
 
-type LogSource = 'metro' | 'flight' | 'api' | 'dashboard';
+type LogSource = 'metro' | 'flight' | 'api' | 'all';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
@@ -216,7 +216,7 @@ export function LogViewer({ isOpen: externalIsOpen, onToggle }: LogViewerProps =
           alignItems: 'center',
         }}
       >
-        {(['metro', 'flight', 'api', 'dashboard'] as LogSource[]).map((source) => (
+        {(['metro', 'flight', 'api', 'all'] as LogSource[]).map((source) => (
           <button
             key={source}
             onClick={() => setSelectedSource(source)}
