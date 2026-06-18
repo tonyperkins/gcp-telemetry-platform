@@ -36,18 +36,29 @@ Home box (residential IP) ──OpenSky fetch──▶ OpenSky API   ✅ not blo
    (`./deploy.sh`, or `gcloud run services update telemetry-api --region <REGION>`).
 
 2. **Configure the box:**
-   ```bash
-   cd deploy/homebox
-   cp .env.example .env
-   # Edit .env: set PUSH_URL, INGEST_PUSH_TOKEN (= $TOKEN above), and OPENSKY_* creds.
+   For Docker Compose / Dockhand, set the variables in your environment or the Dockhand UI:
    ```
+   PUSH_URL=https://<service-url>/ingest/flight/push
+   INGEST_PUSH_TOKEN=<same $TOKEN stored in GCP Secret Manager>
+   OPENSKY_CLIENT_ID=<your client id>
+   OPENSKY_CLIENT_SECRET=<your client secret>
+   OPENSKY_BBOX=29.8,-98.2,30.8,-97.2
+   POLL_INTERVAL_SECONDS=60
+   RUN_ONCE=false
+   ```
+   (`.env.example` is kept as a reference; do not commit real values.)
 
 3. **Run it:**
    ```bash
+   cd deploy/homebox
    docker compose up -d --build
    docker compose logs -f flightpusher
    ```
    Expect log lines like `pushed 33 aircraft to https://.../ingest/flight/push`.
+
+   In Dockhand, point the stack at this `compose.yaml` and supply the variables in the
+   stack environment. The Dockerfile is in this directory (`deploy/homebox/Dockerfile.pusher`)
+   and the build context is the repo root.
 
 ## Verify
 
