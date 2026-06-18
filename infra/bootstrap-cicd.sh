@@ -31,10 +31,13 @@ SCHEDULER_SA="telemetry-scheduler-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 POOL_RES="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}"
 
 echo "1/6 Enabling required APIs..."
+# cloudresourcemanager is required for Terraform to read/manage project IAM
+# policy under the CI service-account identity.
 gcloud services enable \
     iamcredentials.googleapis.com \
     sts.googleapis.com \
     iam.googleapis.com \
+    cloudresourcemanager.googleapis.com \
     --project="$PROJECT_ID"
 
 echo "2/6 Creating service accounts (idempotent)..."
