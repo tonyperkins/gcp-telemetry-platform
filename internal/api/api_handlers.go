@@ -4,16 +4,20 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/tonyperkins/gcp-telemetry-platform/internal/data"
 	"github.com/tonyperkins/gcp-telemetry-platform/internal/services"
 )
 
 // ApiHandlers exposes the REST API for the Glance dashboard / frontend.
 type ApiHandlers struct {
-	repo   *data.FirestoreRepository
-	gtfs   *services.GtfsShapeService
+	repo *data.FirestoreRepository
+	gtfs *services.GtfsShapeService
 }
 
 func NewApiHandlers(repo *data.FirestoreRepository, gtfsService *services.GtfsShapeService) *ApiHandlers {
@@ -26,7 +30,7 @@ func (h *ApiHandlers) GetActiveVehicles(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	source := r.URL.Query().Get("source")
-	
+
 	if source != "" && source != "metro" && source != "flight" {
 		http.Error(w, `{"error": "invalid source parameter"}`, http.StatusBadRequest)
 		return
@@ -43,7 +47,7 @@ func (h *ApiHandlers) GetActiveVehicles(w http.ResponseWriter, r *http.Request) 
 			allVehicles = append(allVehicles, metroVehicles...)
 		}
 	}
-	
+
 	if source == "" || source == "flight" {
 		flightVehicles, err := h.repo.GetRecentVehicles(r.Context(), "flight", since)
 		if err != nil {
@@ -53,7 +57,7 @@ func (h *ApiHandlers) GetActiveVehicles(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	log.Printf("[API] GetActiveVehicles (source=%s) returning %d deduplicated vehicles (window: %s)", 
+	log.Printf("[API] GetActiveVehicles (source=%s) returning %d deduplicated vehicles (window: %s)",
 		source, len(allVehicles), since.Format("15:04:05"))
 
 	// Ensure we return an empty array instead of null if no vehicles are found
@@ -69,7 +73,7 @@ func (h *ApiHandlers) GetActiveVehicles(w http.ResponseWriter, r *http.Request) 
 func (h *ApiHandlers) GetVehicleHistory(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	// If using chi, we extract url param
-	vehicleId := r.URL.Query().Get("id") 
+	vehicleId := r.URL.Query().Get("id")
 	if vehicleId == "" {
 		http.Error(w, `{"error": "missing id parameter"}`, http.StatusBadRequest)
 		return
@@ -77,7 +81,7 @@ func (h *ApiHandlers) GetVehicleHistory(w http.ResponseWriter, r *http.Request) 
 
 	// 12 hour window for history
 	since := time.Now().UTC().Add(-12 * time.Hour)
-	
+
 	history, err := h.repo.GetVehicleHistory(r.Context(), vehicleId, since)
 	if err != nil {
 		http.Error(w, `{"error": "failed to query history"}`, http.StatusInternalServerError)
@@ -90,9 +94,9 @@ func (h *ApiHandlers) GetVehicleHistory(w http.ResponseWriter, r *http.Request) 
 // GetHealth returns a robust mock health status object for the dashboard
 func (h *ApiHandlers) GetHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	since := time.Now().UTC().Add(-5 * time.Minute)
-	
+
 	metro, _ := h.repo.GetRecentVehicles(r.Context(), "metro", since)
 	flight, _ := h.repo.GetRecentVehicles(r.Context(), "flight", since)
 
@@ -111,7 +115,7 @@ func (h *ApiHandlers) GetHealth(w http.ResponseWriter, r *http.Request) {
 			},
 		},
 	}
-	
+
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -177,10 +181,10 @@ func (h *ApiHandlers) GetManageStatus(w http.ResponseWriter, r *http.Request) {
 // DebugInspect returns a raw counts and sample documents for debugging
 func (h *ApiHandlers) DebugInspect(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	since := time.Now().UTC().Add(-24 * time.Hour)
 	all, err := h.repo.GetRecentVehicles(r.Context(), "metro", since)
-	
+
 	resp := map[string]interface{}{
 		"server_time": time.Now().UTC().Format(time.RFC3339),
 		"query_since": since.Format(time.RFC3339),
@@ -196,4 +200,93 @@ func (h *ApiHandlers) DebugInspect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(resp)
+}
+
+// GetLogs serves the last N lines of the server log file for the dashboard log viewer.
+// The source parameter is accepted for UI routing but all server logs are served from
+// the same file; per-source log aggregation is not implemented yet.
+func (h *ApiHandlers) GetLogs(w http.ResponseWriter, r *http.Request) {
+	_ = chi.URLParam(r, "source")
+
+	lines := r.URL.Query().Get("lines")
+	maxLines, err := strconv.Atoi(lines)
+	if err != nil || maxLines <= 0 || maxLines > 1000 {
+		maxLines = 200
+	}
+
+	logFilePath := os.Getenv("LOG_FILE_PATH")
+	if logFilePath == "" {
+		logFilePath = "/tmp/logs/out.log"
+	}
+
+	logLines, err := readLastLines(logFilePath, maxLines)
+	if err != nil {
+		log.Printf("[API] Failed to read log file %s: %v", logFilePath, err)
+		http.Error(w, `{"error": "failed to read logs"}`, http.StatusInternalServerError)
+		return
+	}
+
+	filename := filepath.Base(logFilePath)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"filename":   filename,
+		"lines":      logLines,
+		"count":      len(logLines),
+		"totalLines": len(logLines),
+	})
+}
+
+// readLastLines reads the last n lines from the named file.
+func readLastLines(filename string, n int) ([]string, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	const blockSize = 4096
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() == 0 {
+		return []string{}, nil
+	}
+
+	// Read the file in reverse chunks until we have enough lines.
+	buf := make([]byte, 0, blockSize)
+	cursor := info.Size()
+	lines := make([]string, 0, n)
+
+	for cursor > 0 && len(lines) < n {
+		readSize := int64(blockSize)
+		if cursor < readSize {
+			readSize = cursor
+		}
+		cursor -= readSize
+
+		chunk := make([]byte, readSize)
+		if _, err := f.ReadAt(chunk, cursor); err != nil {
+			return nil, err
+		}
+		buf = append(chunk, buf...)
+
+		for len(buf) > 0 && len(lines) < n {
+			idx := len(buf) - 1
+			for idx > 0 && buf[idx-1] != '\n' {
+				idx--
+			}
+			line := string(buf[idx:])
+			if line != "" {
+				lines = append(lines, line)
+			}
+			buf = buf[:idx]
+		}
+	}
+
+	// Reverse lines so they are oldest-to-newest.
+	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+		lines[i], lines[j] = lines[j], lines[i]
+	}
+	return lines, nil
 }

@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -21,6 +23,22 @@ func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
+	}
+
+	// Capture server logs to a file so the dashboard log viewer can serve them.
+	logFilePath := os.Getenv("LOG_FILE_PATH")
+	if logFilePath == "" {
+		logFilePath = "/tmp/logs/out.log"
+	}
+	if err := os.MkdirAll(filepath.Dir(logFilePath), 0755); err != nil {
+		log.Printf("Warning: failed to create log directory: %v", err)
+	} else {
+		logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Printf("Warning: failed to open log file: %v", err)
+		} else {
+			log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+		}
 	}
 
 	ctx := context.Background()
@@ -126,6 +144,9 @@ func main() {
 	})
 
 	r.Get("/api/debug/inspect", apiHandlers.DebugInspect)
+
+	// Serve the last N lines of server logs to the dashboard log viewer.
+	r.Get("/api/logs/{source}", apiHandlers.GetLogs)
 
 	// Internal Worker Triggers (invoked purely by Cloud Scheduler)
 	r.Route("/ingest", func(r chi.Router) {
