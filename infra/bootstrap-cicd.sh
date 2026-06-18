@@ -72,11 +72,13 @@ for role in \
         --member="serviceAccount:${DEPLOYER_SA}" --role="$role" --condition=None >/dev/null
 done
 
-# State + Cloud Build staging buckets: object read/write (incl. state lock).
-for bucket in "$STATE_BUCKET" "$STAGING_BUCKET"; do
-    gcloud storage buckets add-iam-policy-binding "gs://${bucket}" \
-        --member="serviceAccount:${DEPLOYER_SA}" --role="roles/storage.objectAdmin" >/dev/null
-done
+# State bucket: object read/write is enough for the gcs backend (incl. lock).
+gcloud storage buckets add-iam-policy-binding "gs://${STATE_BUCKET}" \
+    --member="serviceAccount:${DEPLOYER_SA}" --role="roles/storage.objectAdmin" >/dev/null
+# Cloud Build staging bucket: needs bucket-level access too (`gcloud builds
+# submit` calls buckets.get/create), which objectAdmin lacks.
+gcloud storage buckets add-iam-policy-binding "gs://${STAGING_BUCKET}" \
+    --member="serviceAccount:${DEPLOYER_SA}" --role="roles/storage.admin" >/dev/null
 
 # actAs the runtime SAs (deploying Cloud Run / Scheduler OIDC requires it).
 for sa in "$CLOUDRUN_SA" "$SCHEDULER_SA"; do
