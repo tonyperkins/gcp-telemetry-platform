@@ -1,0 +1,49 @@
+name: Deploy
+
+# Manual, gated deploy. Triggers only via the "Run workflow" button on main,
+# and the `production` environment requires a reviewer's approval before the
+# job runs — so a merge never spins up paid resources on its own.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # required to mint the OIDC token for WIF
+
+jobs:
+  deploy:
+    name: Build & apply
+    runs-on: ubuntu-latest
+    environment: production   # required-reviewer gate
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Build & push image (Cloud Build)
+        id: build
+        run: |
+          TAG=$(date +%s)
+          IMAGE="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}/${{ vars.GCP_IMAGE_NAME }}:${TAG}"
+          gcloud builds submit --tag "$IMAGE" --project "${{ vars.GCP_PROJECT_ID }}"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform apply
+        env:
+          TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+          TF_VAR_region: ${{ vars.GCP_REGION }}
+          TF_VAR_image_url: ${{ steps.build.outputs.image }}
+        run: |
+          terraform -chdir=infra init
+          terraform -chdir=infra apply -auto-approve -input=false
+
+      - name: Show service URL
+        run: terraform -chdir=infra output -raw service_url
