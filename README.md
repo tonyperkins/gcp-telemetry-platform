@@ -176,7 +176,7 @@ The primary path is **CI/CD via GitHub Actions** (below). `deploy.sh` remains as
 **Keyless auth via Workload Identity Federation.** No service-account JSON keys exist; GitHub's OIDC token is exchanged for short-lived GCP credentials. The WIF provider is locked to this repo (`attribute.repository`), and the two identities are least-privilege:
 
 - **`gh-planner`** — `roles/viewer` only; impersonable from any ref, so PR plans can run safely.
-- **`gh-deployer`** — curated, non-escalating roles (Cloud Run / Scheduler / Artifact Registry / Cloud Build / Firestore + state-bucket access, plus `actAs` on the runtime SAs). Deliberately *lacks* project-IAM-admin, SA-admin and secret-admin, so CI can deploy images but cannot modify IAM, service accounts or secrets — those stay a human-run `deploy.sh` operation. Impersonation is restricted to `refs/heads/main`.
+- **`gh-deployer`** — curated, non-escalating roles (Cloud Run / Scheduler / Artifact Registry / Firestore + state-bucket access, plus `actAs` on the runtime SAs, and read-only IAM visibility for state refresh). Deliberately *lacks* project-IAM-admin, SA-admin and secret-admin, so CI can deploy images but cannot modify IAM, service accounts or secrets — those stay a human-run `deploy.sh` operation. Impersonation is restricted to `refs/heads/main`.
 
 **Deploys are gated.** `deploy.yml` only runs from the manual *Run workflow* button, and the `production` GitHub Environment requires a reviewer's approval before the job executes — a merge never spins up paid resources on its own.
 

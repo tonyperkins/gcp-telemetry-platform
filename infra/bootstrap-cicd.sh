@@ -56,8 +56,10 @@ done
 echo "4/6 Granting DEPLOYER curated (non-escalating) roles..."
 # Deliberately excludes projectIamAdmin / serviceAccountAdmin / secretmanager.admin:
 # the IAM bindings, service accounts and secrets are managed out-of-band, so a
-# normal image deploy never needs to modify them. If those resources ever
-# change, `apply` fails loudly and a human runs ./deploy.sh — no silent
+# normal image deploy never needs to modify them. iam.securityReviewer grants
+# READ-only IAM visibility (getIamPolicy) so Terraform can refresh the
+# google_project_iam_member resources — it cannot write IAM. If those resources
+# ever change, `apply` fails loudly and a human runs ./deploy.sh — no silent
 # privilege escalation path from CI.
 for role in \
     roles/run.admin \
@@ -65,6 +67,7 @@ for role in \
     roles/artifactregistry.writer \
     roles/datastore.owner \
     roles/secretmanager.viewer \
+    roles/iam.securityReviewer \
     roles/serviceusage.serviceUsageConsumer; do
     gcloud projects add-iam-policy-binding "$PROJECT_ID" \
         --member="serviceAccount:${DEPLOYER_SA}" --role="$role" --condition=None >/dev/null
