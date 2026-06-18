@@ -93,9 +93,12 @@ OpenSky's API host silently drops TCP connections from the Cloud Run egress IP (
 │   ├── src/
 │   ├── public/docs/             # help.md + runbook.md (served at /docs/*)
 │   └── dist/                    # Build output baked into the container
+├── .github/workflows/           # CI, terraform-plan (PR), deploy (manual)
 ├── infra/                       # Terraform (Cloud Run, Scheduler, Firestore TTL, IAM)
+│   ├── backend.tf               # Remote state (GCS)
+│   └── bootstrap-cicd.sh        # One-time WIF + service-account setup
 ├── Dockerfile                   # Multi-stage: build frontend + backend
-├── deploy.sh                    # Build image + terraform apply
+├── deploy.sh                    # Local/break-glass: build image + terraform apply
 └── destroy.sh                   # terraform destroy (demo-at-rest teardown)
 ```
 
@@ -159,6 +162,27 @@ npm run build    # Outputs to dashboard/dist (served by the Go binary in prod)
 ---
 
 ## Deployment
+
+The primary path is **CI/CD via GitHub Actions** (below). `deploy.sh` remains as a local/break-glass alternative.
+
+### CI/CD (GitHub Actions)
+
+| Workflow | Trigger | Auth | Does |
+|---|---|---|---|
+| `ci.yml` | every PR + push to `main` | none | `go build`/`vet`/`test`, dashboard build, `terraform fmt`/`validate` |
+| `terraform-plan.yml` | PRs touching `infra/**` | WIF → `gh-planner` (read-only) | `terraform plan`, posted as a PR comment |
+| `deploy.yml` | manual (`workflow_dispatch`) | WIF → `gh-deployer` | Cloud Build image + `terraform apply` |
+
+**Keyless auth via Workload Identity Federation.** No service-account JSON keys exist; GitHub's OIDC token is exchanged for short-lived GCP credentials. The WIF provider is locked to this repo (`attribute.repository`), and the two identities are least-privilege:
+
+- **`gh-planner`** — `roles/viewer` only; impersonable from any ref, so PR plans can run safely.
+- **`gh-deployer`** — curated, non-escalating roles (Cloud Run / Scheduler / Artifact Registry / Cloud Build / Firestore + state-bucket access, plus `actAs` on the runtime SAs). Deliberately *lacks* project-IAM-admin, SA-admin and secret-admin, so CI can deploy images but cannot modify IAM, service accounts or secrets — those stay a human-run `deploy.sh` operation. Impersonation is restricted to `refs/heads/main`.
+
+**Deploys are gated.** `deploy.yml` only runs from the manual *Run workflow* button, and the `production` GitHub Environment requires a reviewer's approval before the job executes — a merge never spins up paid resources on its own.
+
+One-time setup of the WIF pool, providers and service accounts is scripted in **`infra/bootstrap-cicd.sh`** (idempotent; run once with an admin account). Repo variables (`WIF_PROVIDER`, `GCP_*`) wire the workflows to the project.
+
+### Local / break-glass deploy
 
 `deploy.sh` is idempotent: it enables APIs, ensures the Artifact Registry repo and placeholder secrets exist, builds the container with Cloud Build, and applies Terraform.
 

@@ -1,0 +1,81 @@
+name: Terraform Plan
+
+# Read-only plan on PRs that touch infra. Authenticates as the gh-planner
+# service account (viewer-only) via Workload Identity Federation, then posts
+# the plan as a PR comment so infra changes are reviewable before merge.
+on:
+  pull_request:
+    paths:
+      - infra/**
+      - .github/workflows/terraform-plan.yml
+
+permissions:
+  contents: read
+  id-token: write       # required to mint the OIDC token for WIF
+  pull-requests: write  # required to post the plan comment
+
+jobs:
+  plan:
+    name: terraform plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_PLANNER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Resolve current image
+        id: img
+        # Plan against the image that's actually deployed so an unrelated infra
+        # PR doesn't show a spurious Cloud Run image diff.
+        run: |
+          IMAGE=$(gcloud run services describe telemetry-api \
+            --region "${{ vars.GCP_REGION }}" --project "${{ vars.GCP_PROJECT_ID }}" \
+            --format='value(spec.template.spec.containers[0].image)')
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform plan
+        id: plan
+        env:
+          TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+          TF_VAR_region: ${{ vars.GCP_REGION }}
+          TF_VAR_image_url: ${{ steps.img.outputs.image }}
+        run: |
+          terraform -chdir=infra init
+          set +e
+          # -lock=false: planner is read-only and never needs the state lock.
+          terraform -chdir=infra plan -no-color -lock=false -input=false > plan.txt 2>&1
+          echo "exitcode=$?" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Comment plan on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let plan = fs.readFileSync('plan.txt', 'utf8');
+            const max = 60000;
+            if (plan.length > max) plan = plan.slice(0, max) + '\n... (truncated)';
+            const body = [
+              '#### Terraform Plan 📖',
+              '```terraform',
+              plan,
+              '```',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail if plan errored
+        if: steps.plan.outputs.exitcode != '0'
+        run: exit 1
