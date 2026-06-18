@@ -7,6 +7,12 @@ services:
     image: gcp-telemetry-flightpusher:latest
     container_name: flightpusher
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      INGEST_PUSH_TOKEN: ${INGEST_PUSH_TOKEN}
+      OPENSKY_BBOX: ${OPENSKY_BBOX:-29.8,-98.2,30.8,-97.2}
+      OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID}
+      OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
+      PUSH_URL: ${PUSH_URL}
+      RUN_ONCE: ${RUN_ONCE:-false}
     # No ports exposed: the pusher is outbound-only (OpenSky + Cloud Run).
