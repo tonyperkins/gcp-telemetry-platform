@@ -171,7 +171,7 @@ The primary path is **CI/CD via GitHub Actions** (below). `deploy.sh` remains as
 |---|---|---|---|
 | `ci.yml` | every PR + push to `main` | none | `go build`/`vet`/`test`, dashboard build, `terraform fmt`/`validate` |
 | `terraform-plan.yml` | PRs touching `infra/**` | WIF → `gh-planner` (read-only) | `terraform plan`, posted as a PR comment |
-| `deploy.yml` | manual (`workflow_dispatch`) | WIF → `gh-deployer` | Cloud Build image + `terraform apply` |
+| `deploy.yml` | manual (`workflow_dispatch`) | WIF → `gh-deployer` | Docker build + push to Artifact Registry, then `terraform apply` |
 
 **Keyless auth via Workload Identity Federation.** No service-account JSON keys exist; GitHub's OIDC token is exchanged for short-lived GCP credentials. The WIF provider is locked to this repo (`attribute.repository`), and the two identities are least-privilege:
 

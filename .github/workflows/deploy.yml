@@ -28,12 +28,17 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
 
-      - name: Build & push image (Cloud Build)
+      - name: Build & push image
         id: build
+        # Build on the runner and push straight to Artifact Registry. Simpler
+        # and tighter-privilege than Cloud Build (needs only artifactregistry
+        # .writer; no Cloud Build API or staging bucket).
         run: |
           TAG=$(date +%s)
           IMAGE="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}/${{ vars.GCP_IMAGE_NAME }}:${TAG}"
-          gcloud builds submit --tag "$IMAGE" --project "${{ vars.GCP_PROJECT_ID }}"
+          gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
       - name: Terraform apply

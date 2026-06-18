@@ -24,7 +24,6 @@ PLANNER_SA="gh-planner@${PROJECT_ID}.iam.gserviceaccount.com"
 DEPLOYER_SA="gh-deployer@${PROJECT_ID}.iam.gserviceaccount.com"
 
 STATE_BUCKET="gcp-telemetry-platform-tfstate"
-STAGING_BUCKET="${PROJECT_ID}_cloudbuild"
 CLOUDRUN_SA="telemetry-cloudrun-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 SCHEDULER_SA="telemetry-scheduler-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 
@@ -64,7 +63,6 @@ for role in \
     roles/run.admin \
     roles/cloudscheduler.admin \
     roles/artifactregistry.writer \
-    roles/cloudbuild.builds.editor \
     roles/datastore.owner \
     roles/secretmanager.viewer \
     roles/serviceusage.serviceUsageConsumer; do
@@ -73,12 +71,10 @@ for role in \
 done
 
 # State bucket: object read/write is enough for the gcs backend (incl. lock).
+# (The CI image is built on the runner and pushed to Artifact Registry, so no
+# Cloud Build API / staging bucket access is needed.)
 gcloud storage buckets add-iam-policy-binding "gs://${STATE_BUCKET}" \
     --member="serviceAccount:${DEPLOYER_SA}" --role="roles/storage.objectAdmin" >/dev/null
-# Cloud Build staging bucket: needs bucket-level access too (`gcloud builds
-# submit` calls buckets.get/create), which objectAdmin lacks.
-gcloud storage buckets add-iam-policy-binding "gs://${STAGING_BUCKET}" \
-    --member="serviceAccount:${DEPLOYER_SA}" --role="roles/storage.admin" >/dev/null
 
 # actAs the runtime SAs (deploying Cloud Run / Scheduler OIDC requires it).
 for sa in "$CLOUDRUN_SA" "$SCHEDULER_SA"; do
