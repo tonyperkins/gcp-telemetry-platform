@@ -1,0 +1,12 @@
+services:
+  flightpusher:
+    build:
+      # Build context is the repo root so the Go module is available.
+      context: ../..
+      dockerfile: Dockerfile.pusher
+    image: gcp-telemetry-flightpusher:latest
+    container_name: flightpusher
+    restart: unless-stopped
+    env_file:
+      - .env
+    # No ports exposed: the pusher is outbound-only (OpenSky + Cloud Run).

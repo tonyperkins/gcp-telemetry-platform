@@ -1,0 +1,14 @@
+# Off-cloud OpenSky -> Cloud Run flight pusher.
+# Runs on a non-cloud (residential) host because OpenSky blocks GCP egress.
+FROM golang:alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . ./
+RUN CGO_ENABLED=0 GOOS=linux go build -o flightpusher ./cmd/flightpusher
+
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates tzdata
+WORKDIR /app
+COPY --from=builder /app/flightpusher /app/flightpusher
+CMD ["/app/flightpusher"]
