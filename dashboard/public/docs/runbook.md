@@ -54,10 +54,9 @@ sequenceDiagram
 |---|---|---|---|
 | Telemetry API + SPA | `telemetry-api` | Cloud Run | High |
 | Metro ingestion trigger | `metro-ingester` | Cloud Scheduler | Medium |
-| Flight ingestion trigger | `flight-ingester` | Cloud Scheduler | Medium |
-| Datastore | `vehicles` collection | Firestore (native) | High |
-| Secrets | `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` | Secret Manager | High |
-| Static egress | `telemetry-nat-ip` | Cloud NAT + VPC connector | High |
+| Flight ingestion (off-cloud) | flight pusher → `POST /ingest/flight/push` | External host (residential IP) | Medium |
+| Datastore | `vehicles` collection (24h TTL) | Firestore (native) | High |
+| Secrets | `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` / `INGEST_PUSH_TOKEN` | Secret Manager | High |
 | Container images | `telemetry-repo` | Artifact Registry | Medium |
 
 **SLO:** `/api/health` returns HTTP 200 with `status: "healthy"` for ≥99% of minutes in a 30-day rolling window.
@@ -68,10 +67,9 @@ sequenceDiagram
 
 - 📊 **[Cloud Run Service](https://console.cloud.google.com/run/detail/REGION/telemetry-api/metrics?project=PROJECT_ID)** — Request count, latency, instance count, error rate
 - 📈 **[Cloud Logging (Logs Explorer)](https://console.cloud.google.com/logs/query?project=PROJECT_ID)** — Filter by `resource.type="cloud_run_revision"`
-- ⏰ **[Cloud Scheduler Jobs](https://console.cloud.google.com/cloudscheduler?project=PROJECT_ID)** — Inspect `metro-ingester` / `flight-ingester` state and last run
+- ⏰ **[Cloud Scheduler Jobs](https://console.cloud.google.com/cloudscheduler?project=PROJECT_ID)** — Inspect `metro-ingester` state and last run
 - 🔥 **[Firestore Data](https://console.cloud.google.com/firestore/databases/-default-/data?project=PROJECT_ID)** — Browse the `vehicles` collection
-- 🔐 **[Secret Manager](https://console.cloud.google.com/security/secret-manager?project=PROJECT_ID)** — OpenSky credentials
-- 🌐 **[Cloud NAT](https://console.cloud.google.com/net-services/nat/list?project=PROJECT_ID)** — Verify static egress IP for OpenSky calls
+- 🔐 **[Secret Manager](https://console.cloud.google.com/security/secret-manager?project=PROJECT_ID)** — OpenSky credentials + flight push token
 
 ---
 
@@ -93,7 +91,6 @@ curl "$SERVICE_URL/api/manage/opensky-status" | jq .
 
 # Cloud Scheduler job state (paused vs enabled)
 gcloud scheduler jobs describe metro-ingester  --location "$REGION" --format='value(state)'
-gcloud scheduler jobs describe flight-ingester --location "$REGION" --format='value(state)'
 ```
 
 ### Cloud Logging queries (Logs Explorer)
@@ -116,8 +113,7 @@ severity>=ERROR
 
 **Pause ingestion to let the demo idle overnight (saves invocation cost):**
 ```bash
-gcloud scheduler jobs pause metro-ingester  --location "$REGION"
-gcloud scheduler jobs pause flight-ingester --location "$REGION"
+gcloud scheduler jobs pause metro-ingester --location "$REGION"
 ```
 
 ---
@@ -159,39 +155,38 @@ gcloud scheduler jobs pause flight-ingester --location "$REGION"
 
 ### 3.2 Flight Feed Stale
 
-**Condition:** `/ingest/flight` runs but no `flight` documents appear in Firestore.
+**Condition:** no fresh `flight` documents appear in Firestore (the off-cloud pusher has stopped POSTing to `/ingest/flight/push`).
 
 > [!IMPORTANT]
 > **Known limitation (verified 2026-06-18): OpenSky blocks GCP egress.**
-> OpenSky's API host (`api.opensky-network.org` / `opensky-network.org`) **silently drops TCP connections from this deployment's Cloud NAT egress IP**, producing `dial tcp ...:443: i/o timeout` on every flight fetch. This was confirmed in `europe-west3` with a dedicated static NAT IP in OAuth2-authenticated mode — i.e. the region and static IP do **not** bypass the block. The same OpenSky endpoint returns HTTP 200 instantly from a non-cloud (residential/ISP) IP, and the Metro feed works fine from the same NAT IP, so this is **OpenSky IP-level blocking of cloud datacenter ranges**, not a rate-limit, outage, or NAT misconfiguration.
+> OpenSky's API host (`api.opensky-network.org` / `opensky-network.org`) **silently drops TCP connections from GCP datacenter IPs**, producing `dial tcp ...:443: i/o timeout` on every flight fetch made from Cloud Run. This was confirmed in `europe-west3` with a dedicated static NAT IP in OAuth2-authenticated mode — i.e. region and static IP do **not** bypass the block. The same OpenSky endpoint returns HTTP 200 instantly from a non-cloud (residential/ISP) IP, and the Metro feed works fine from GCP egress, so this is **OpenSky IP-level blocking of cloud datacenter ranges**, not a rate-limit, outage, or misconfiguration.
 >
-> **Implication:** flights will not populate while ingestion runs on GCP egress. See "Workarounds" below. Metro telemetry is unaffected.
+> **Resolution (implemented):** flights are no longer fetched from GCP. An off-cloud **flight pusher** runs on a residential host, fetches OpenSky from an unblocked IP, and POSTs aircraft to `POST /ingest/flight/push` (guarded by `INGEST_PUSH_TOKEN`). The earlier VPC connector + Cloud NAT + static-IP stack — which existed only to chase this block — has been removed. Metro telemetry is unaffected.
 
-**Other (non-blocked) causes — relevant only if egress is *not* timing out:**
+**Likely causes (the off-cloud pusher is the source of all flight data):**
+- The flight pusher process/host is down, lost connectivity, or its `INGEST_PUSH_TOKEN` no longer matches the Secret Manager value.
 - Legitimate low traffic at 3–5 AM local time (very few aircraft over Austin).
-- HTTP 429 rate-limit → the app opens a 5-minute circuit breaker and resumes automatically. Anonymous OpenSky allows ~400 credits/day; authenticated (`OPENSKY_CLIENT_ID`/`SECRET`) raises this to ~4000/day. Quota resets at 00:00 UTC.
+- HTTP 429 rate-limit at the pusher → it backs off and resumes automatically. Anonymous OpenSky allows ~400 credits/day; authenticated (`OPENSKY_CLIENT_ID`/`SECRET`) raises this to ~4000/day. Quota resets at 00:00 UTC.
 
 **Investigation steps:**
 
-1. Distinguish a block/timeout from an empty result — check the logs:
+1. Confirm the cloud side is accepting pushes — look for push activity / auth failures in the logs:
    ```
    resource.labels.service_name="telemetry-api"
-   textPayload:("i/o timeout" OR "OpenSky" OR "429" OR "both endpoints")
+   textPayload:("flight/push" OR "INGEST_PUSH_TOKEN" OR "unauthorized")
    ```
-   - `dial tcp ... i/o timeout` → IP block (the known limitation above).
-   - `429` / `rate limit` → throttled; circuit breaker handles it.
-   - No flight log line at all + non-zero aircraft elsewhere → likely a successful fetch returning 0 states (genuinely quiet airspace).
+   - `401 unauthorized` on `/ingest/flight/push` → token mismatch; re-sync the pusher's token with Secret Manager.
+   - No push log lines at all → the pusher is not reaching the service (check the pusher host).
 
-2. Confirm OpenSky itself is up, from a **non-cloud** IP (e.g. your laptop):
+2. Check the pusher host itself (see `deploy/homebox/README.md`) — process status and its OpenSky fetch logs.
+
+3. Confirm OpenSky itself is up, from the **pusher's (non-cloud) IP**:
    ```bash
    curl -s "https://opensky-network.org/api/states/all?lamin=29.8&lomin=-98.2&lamax=30.8&lomax=-97.2" | jq '.states | length'
-   # Daytime: 10–100+ aircraft. If this returns data but Cloud Run times out, OpenSky is blocking the GCP IP.
+   # Daytime: 10–100+ aircraft. A direct fetch from GCP will time out — that block is expected and is why the pusher exists.
    ```
 
-**Workarounds (to actually get flights flowing):**
-- Route OpenSky calls through a **non-cloud egress** — e.g. an HTTP(S) proxy on a residential/VPS IP not on OpenSky's datacenter blocklist, or a self-hosted relay.
-- Run **flight ingestion off-cloud** (e.g. a small box on a residential connection) and write results to the same Firestore collection.
-- Accept Metro-only on GCP and treat the flight layer as best-effort. (The reserved static NAT IP exists so that, *if* OpenSky ever allowlists it, no code change is needed — but they do not allowlist free-tier datacenter IPs by default.)
+**Note:** do **not** try to "fix" flights by fetching from Cloud Run — OpenSky blocks GCP IPs by design (see the resolution above). All flight data must continue to flow through the off-cloud pusher.
 
 ---
 
@@ -249,8 +244,9 @@ printf 'NEW_CLIENT_SECRET' | gcloud secrets versions add OPENSKY_CLIENT_SECRET -
 ### Manually trigger an ingestion run
 
 ```bash
-gcloud scheduler jobs run metro-ingester  --location "$REGION"
-gcloud scheduler jobs run flight-ingester --location "$REGION"
+gcloud scheduler jobs run metro-ingester --location "$REGION"
+# Flights are pushed from the off-cloud host, not triggered by Cloud Scheduler —
+# see deploy/homebox/README.md to run the pusher manually.
 ```
 
 ### Inspect the data directly (break-glass)
@@ -265,17 +261,15 @@ curl "$SERVICE_URL/api/debug/inspect" | jq .
 
 ```bash
 # Pause (demo-at-rest)
-gcloud scheduler jobs pause  metro-ingester  --location "$REGION"
-gcloud scheduler jobs pause  flight-ingester --location "$REGION"
+gcloud scheduler jobs pause  metro-ingester --location "$REGION"
 # Resume
-gcloud scheduler jobs resume metro-ingester  --location "$REGION"
-gcloud scheduler jobs resume flight-ingester --location "$REGION"
+gcloud scheduler jobs resume metro-ingester --location "$REGION"
 ```
 
 ### Full teardown (demo-at-rest)
 
 ```bash
-./destroy.sh   # destroys Cloud Run/Scheduler/VPC/NAT; preserves Firestore data + secrets
+./destroy.sh   # destroys Cloud Run/Scheduler; preserves Firestore data + secrets
 ```
 
 ---

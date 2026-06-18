@@ -10,6 +10,8 @@ IMAGE_TAG=$(date +%s) # Use timestamp instead of latest to force Terraform to de
 echo "🚀 Starting GCP Telemetry Platform Deployment..."
 
 echo "1️⃣ Enabling Required GCP APIs..."
+# Note: compute.googleapis.com / vpcaccess.googleapis.com are no longer needed
+# now that the VPC connector + Cloud NAT stack has been removed.
 gcloud services enable \
     artifactregistry.googleapis.com \
     run.googleapis.com \
@@ -17,8 +19,6 @@ gcloud services enable \
     secretmanager.googleapis.com \
     cloudscheduler.googleapis.com \
     firestore.googleapis.com \
-    compute.googleapis.com \
-    vpcaccess.googleapis.com \
     --project=$PROJECT_ID
 
 echo "2️⃣ Checking if Artifact Registry repository exists..."

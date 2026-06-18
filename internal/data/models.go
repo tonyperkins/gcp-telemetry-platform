@@ -19,4 +19,8 @@ type Vehicle struct {
 	OnGround   *bool     `firestore:"on_ground,omitempty" json:"onGround,omitempty"` // flight only; 1=on ground
 	RawJSON    string    `firestore:"raw_json,omitempty" json:"rawJson,omitempty"`   // full source payload for replay
 	IngestedAt time.Time `firestore:"ingested_at" json:"ingestedAt"`
+	// ExpireAt drives the Firestore TTL policy (set to IngestedAt + 24h on
+	// write). Firestore deletes the document after this time at no cost,
+	// keeping the append-only vehicles collection from growing unbounded.
+	ExpireAt time.Time `firestore:"expire_at" json:"-"`
 }

@@ -20,8 +20,8 @@ variable "opensky_bbox" {
   default     = "29.8,-98.2,30.8,-97.2"
 }
 
-variable "flight_polling_cron" {
+variable "metro_polling_cron" {
   type        = string
-  description = "Cron expression for OpenSky API fetching"
-  default     = "*/1 * * * *"
+  description = "Cron expression for the Metro GTFS-RT poll. Every 2 min keeps Cloud Run invocations and Firestore writes well within the free tier for a demo."
+  default     = "*/2 * * * *"
 }

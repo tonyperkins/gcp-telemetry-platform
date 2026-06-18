@@ -44,6 +44,10 @@ func (r *FirestoreRepository) SaveVehicles(ctx context.Context, vehicles []Vehic
 		if v.IngestedAt.IsZero() {
 			v.IngestedAt = time.Now().UTC()
 		}
+		// Drive the Firestore TTL policy: expire 24h after ingestion, safely
+		// beyond the 12h history read window. Firestore reclaims the storage
+		// for free, keeping this append-only collection in the free tier.
+		v.ExpireAt = v.IngestedAt.Add(24 * time.Hour)
 		batch.Set(docRef, v)
 	}
 

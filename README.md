@@ -16,36 +16,51 @@ The platform doubles as an **SRE demo**: the dashboard exposes live health, SLOs
 ```
                         ┌─────────────────────┐
    Cloud Scheduler ────▶│  Cloud Run (Go)     │────▶ Firestore
-   (metro + flight      │  - REST API         │      (vehicles collection)
-    cron jobs, OIDC)    │  - /ingest workers  │
+   (metro cron, OIDC)   │  - REST API         │      (vehicles collection,
+                        │  - /ingest workers  │       24h TTL on docs)
                         │  - serves React SPA │
                         └─────────┬───────────┘
-                                  │ egress via
-                                  ▼ VPC connector
-                        ┌─────────────────────┐
-                        │ Cloud NAT (static IP)│────▶ OpenSky / CapMetro
-                        └─────────────────────┘            (upstream APIs)
+                                  │ default direct
+                                  ▼ internet egress
+                            CapMetro GTFS-RT
+                          (OpenSky upstream)
 
-   Secret Manager ──▶ OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET
+   Off-cloud flight pusher ──▶ POST /ingest/flight/push  (Bearer token)
+   (residential IP)
+
+   Secret Manager ──▶ OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET / INGEST_PUSH_TOKEN
 ```
 
 **Single-container design:** the Go binary serves both the JSON API and the compiled React SPA (`dashboard/dist`). One Cloud Run service hosts everything.
 
 | Concern | GCP service |
 |---|---|
-| Compute / API / static hosting | Cloud Run (`telemetry-api`) |
-| Scheduled ingestion triggers | Cloud Scheduler (`metro-ingester`, `flight-ingester`) |
-| Datastore | Firestore (native mode) |
-| Secrets | Secret Manager (`OPENSKY_CLIENT_ID`, `OPENSKY_CLIENT_SECRET`) |
-| Static egress IP (intended for OpenSky)¹ | VPC connector + Cloud NAT + reserved IP |
+| Compute / API / static hosting | Cloud Run (`telemetry-api`, scales to zero) |
+| Scheduled ingestion trigger | Cloud Scheduler (`metro-ingester`) |
+| Datastore | Firestore (native mode, 24h TTL on `vehicles`) |
+| Secrets | Secret Manager (`OPENSKY_CLIENT_ID`, `OPENSKY_CLIENT_SECRET`, `INGEST_PUSH_TOKEN`) |
 | Container images | Artifact Registry |
 | Build | Cloud Build |
 
-¹ The static egress IP was intended to get OpenSky calls past datacenter-IP blocking, but testing shows it does **not** — see [Known limitations](#known-limitations).
+**No VPC / Cloud NAT.** An earlier design ran a Serverless VPC Access connector + Cloud NAT + reserved static IP to give OpenSky a stable egress IP. OpenSky blocks GCP datacenter IPs regardless of region or static IP (see [Known limitations](#known-limitations)), so that stack cost ~$45/mo for zero benefit and has been removed. Flights now arrive via the off-cloud pusher, and the Metro feed is reachable over Cloud Run's default direct internet egress.
 
 ### Region choice
 
 Resources deploy to **`europe-west3` (Frankfurt)**, set in `deploy.sh`/`destroy.sh`. The original rationale was OpenSky proximity (its API servers are in Switzerland) and EU IP reputation. **This does not actually help** (see below), but the region is otherwise fine and kept for continuity. Note the Terraform `region` variable still defaults to `us-central1`; the scripts override it explicitly.
+
+### Cost
+
+Designed to cost **a few dollars a month or less**:
+
+- **Cloud Run** scales to zero (`min_instance_count = 0`, `cpu_idle = true`) and is capped at 2 instances, so there is no idle compute charge and no runaway-bill risk.
+- **Metro polling** runs every 2 minutes (`metro_polling_cron`), keeping Cloud Run invocations and Firestore writes inside the free tier.
+- **Firestore** documents carry a 24h TTL (`expire_at` field), so the append-only `vehicles` collection self-prunes and storage stays in the free tier.
+- **No always-on networking** (VPC connector / Cloud NAT / static IP removed) — this was the single largest line item.
+
+| State | Approx. monthly cost |
+|---|---|
+| Deployed and running | ~$0–2 (largely free tier) |
+| Torn down via `destroy.sh` | < $0.10 (Firestore data + secrets at rest) |
 
 ---
 
@@ -78,7 +93,7 @@ OpenSky's API host silently drops TCP connections from the Cloud Run egress IP (
 │   ├── src/
 │   ├── public/docs/             # help.md + runbook.md (served at /docs/*)
 │   └── dist/                    # Build output baked into the container
-├── infra/                       # Terraform (Cloud Run, Scheduler, VPC/NAT, IAM)
+├── infra/                       # Terraform (Cloud Run, Scheduler, Firestore TTL, IAM)
 ├── Dockerfile                   # Multi-stage: build frontend + backend
 ├── deploy.sh                    # Build image + terraform apply
 └── destroy.sh                   # terraform destroy (demo-at-rest teardown)
@@ -163,7 +178,7 @@ printf 'YOUR_CLIENT_SECRET' | gcloud secrets versions add OPENSKY_CLIENT_SECRET 
 ### Teardown (demo-at-rest)
 
 ```bash
-./destroy.sh   # destroys Cloud Run/Scheduler/VPC; preserves Firestore data + secrets
+./destroy.sh   # destroys Cloud Run/Scheduler; preserves Firestore data + secrets
 ```
 
 Idle cost after teardown is effectively zero. Re-run `./deploy.sh` to bring the demo back online.

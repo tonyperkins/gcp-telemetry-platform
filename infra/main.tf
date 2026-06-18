@@ -13,77 +13,19 @@ provider "google" {
   region  = var.region
 }
 
-# Enable Required APIs
-resource "google_project_service" "compute" {
-  service            = "compute.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "vpcaccess" {
-  service            = "vpcaccess.googleapis.com"
-  disable_on_destroy = false
-}
+# ---------------------------------------------------------------------------
+# Egress note
+# ---------------------------------------------------------------------------
+# This service previously ran a VPC connector + Cloud NAT + reserved static IP
+# purely to give OpenSky a stable egress IP. OpenSky blocks GCP datacenter IP
+# ranges regardless of region or static IP (see README "Known limitations"),
+# so that stack was pure cost (~$45/mo) for zero benefit. Flights now arrive
+# via the off-cloud flight pusher (POST /ingest/flight/push), and the Capital
+# Metro feed is reachable over Cloud Run's default direct internet egress, so
+# the entire VPC/NAT stack has been removed.
 
 # ---------------------------------------------------------------------------
-# Networking: VPC + Cloud NAT (for Static Egress IP)
-# ---------------------------------------------------------------------------
-
-resource "google_compute_network" "telemetry_vpc" {
-  name                    = "telemetry-vpc"
-  auto_create_subnetworks = false
-}
-
-resource "google_compute_subnetwork" "telemetry_subnet" {
-  name          = "telemetry-subnet"
-  ip_cidr_range = "10.10.0.0/24"
-  region        = var.region
-  network       = google_compute_network.telemetry_vpc.id
-}
-
-# Serverless VPC Access Connector
-resource "google_vpc_access_connector" "connector" {
-  name          = "telemetry-connector"
-  region        = var.region
-  ip_cidr_range = "10.124.0.0/28"
-  network       = google_compute_network.telemetry_vpc.name
-  
-  # Min/Max instances for cost/scaling
-  min_instances = 2
-  max_instances = 3
-
-  depends_on = [google_project_service.vpcaccess]
-}
-
-# Static IP for the NAT
-resource "google_compute_address" "nat_ip" {
-  name   = "telemetry-nat-ip"
-  region = var.region
-}
-
-# Router for NAT
-resource "google_compute_router" "router" {
-  name    = "telemetry-router"
-  region  = var.region
-  network = google_compute_network.telemetry_vpc.id
-}
-
-# NAT Gateway
-resource "google_compute_router_nat" "nat" {
-  name                               = "telemetry-nat"
-  router                             = google_compute_router.router.name
-  region                             = var.region
-  nat_ip_allocate_option             = "MANUAL_ONLY"
-  nat_ips                            = [google_compute_address.nat_ip.self_link]
-  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
-
-  log_config {
-    enable = true
-    filter = "ERRORS_ONLY"
-  }
-}
-
-# ---------------------------------------------------------------------------
-# Secret Manager for OpenSky Credentials
+# Secret Manager for OpenSky Credentials + flight push token
 # ---------------------------------------------------------------------------
 data "google_secret_manager_secret" "opensky_client_id" {
   secret_id = "OPENSKY_CLIENT_ID"
@@ -140,6 +82,21 @@ resource "google_project_iam_member" "firestore_user" {
 }
 
 # ---------------------------------------------------------------------------
+# Firestore TTL: auto-expire old telemetry points to keep storage in the
+# free tier. Documents are written with `expire_at = ingested_at + 24h`
+# (safely beyond the 12h history read window); Firestore deletes them after
+# that timestamp at no cost.
+# ---------------------------------------------------------------------------
+resource "google_firestore_field" "vehicles_ttl" {
+  project    = var.project_id
+  database   = "(default)"
+  collection = "vehicles"
+  field      = "expire_at"
+
+  ttl_config {}
+}
+
+# ---------------------------------------------------------------------------
 # Cloud Run Service (API + Workers)
 # ---------------------------------------------------------------------------
 resource "google_cloud_run_v2_service" "telemetry_api" {
@@ -148,8 +105,22 @@ resource "google_cloud_run_v2_service" "telemetry_api" {
 
   template {
     service_account = google_service_account.cloud_run_sa.email
+
+    # Scale to zero when idle; cap the ceiling so a traffic spike or crash
+    # loop can never run up a bill on a portfolio demo.
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 2
+    }
+
     containers {
       image = var.image_url # CI/CD will provide the actual image URI
+
+      # CPU is only allocated during request processing (default for v2 when
+      # min_instance_count = 0), so there is no charge while idle.
+      resources {
+        cpu_idle = true
+      }
 
       env {
         name  = "GOOGLE_CLOUD_PROJECT"
@@ -164,10 +135,10 @@ resource "google_cloud_run_v2_service" "telemetry_api" {
         value = var.region
       }
       env {
-        name = "OPENSKY_BBOX"
+        name  = "OPENSKY_BBOX"
         value = var.opensky_bbox
       }
-      
+
       env {
         name = "OPENSKY_CLIENT_ID"
         value_source {
@@ -198,11 +169,6 @@ resource "google_cloud_run_v2_service" "telemetry_api" {
         }
       }
     }
-
-    vpc_access {
-      connector = google_vpc_access_connector.connector.id
-      egress    = "ALL_TRAFFIC"
-    }
   }
 }
 
@@ -216,47 +182,28 @@ resource "google_cloud_run_service_iam_member" "public" {
 }
 
 # ---------------------------------------------------------------------------
-# Cloud Scheduler (The Timer Triggers)
+# Cloud Scheduler (The Timer Trigger)
 # ---------------------------------------------------------------------------
-# Service Account for Scheduler to invoke Cloud Run securely
+# Service Account for Scheduler to invoke Cloud Run securely via OIDC.
 resource "google_service_account" "scheduler_sa" {
   account_id   = "telemetry-scheduler-sa"
   display_name = "Telemetry Platform Scheduler Invoker"
 }
 
-# Scheduler needs invoker role, but our Cloud Run is public anyway for the API.
-# However, standard practice is to use OIDC tokens for the /ingest endpoints.
-
+# Only the Metro feed is polled on-cloud. Flights are pushed from an off-cloud
+# host, so there is no flight-ingester job here (it would just POST to a
+# GCP-blocked OpenSky endpoint and burn Cloud Run invocations).
 resource "google_cloud_scheduler_job" "metro_ingester" {
   name             = "metro-ingester"
   description      = "Polls Metro GTFS-RT feed"
-  schedule         = "*/1 * * * *" # Every 1 minute
+  schedule         = var.metro_polling_cron
   time_zone        = "America/Chicago"
   attempt_deadline = "30s"
 
   http_target {
     http_method = "POST"
     uri         = "${google_cloud_run_v2_service.telemetry_api.uri}/ingest/metro"
-    headers     = {
-      "X-CloudScheduler" = "true"
-    }
-    oidc_token {
-      service_account_email = google_service_account.scheduler_sa.email
-    }
-  }
-}
-
-resource "google_cloud_scheduler_job" "flight_ingester" {
-  name             = "flight-ingester"
-  description      = "Polls OpenSky API"
-  schedule         = var.flight_polling_cron
-  time_zone        = "America/Chicago"
-  attempt_deadline = "30s"
-
-  http_target {
-    http_method = "POST"
-    uri         = "${google_cloud_run_v2_service.telemetry_api.uri}/ingest/flight"
-    headers     = {
+    headers = {
       "X-CloudScheduler" = "true"
     }
     oidc_token {
