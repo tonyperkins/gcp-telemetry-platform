@@ -175,6 +175,20 @@ printf 'YOUR_CLIENT_SECRET' | gcloud secrets versions add OPENSKY_CLIENT_SECRET 
 
 > **Note:** `deploy.sh`/`destroy.sh` set `REGION="europe-west3"`, while the Terraform `region` variable defaults to `us-central1`. The scripts pass `region` explicitly, so they win — keep these in sync if you change regions.
 
+### Remote state
+
+Terraform state lives in a versioned, private GCS bucket (`gcp-telemetry-platform-tfstate`, see `infra/backend.tf`) with native state locking — never in git. State is never committed (`*.tfstate` is gitignored); `.terraform.lock.hcl` *is* committed to pin provider versions.
+
+The bucket is created out-of-band, since it can't be managed by the state it holds:
+
+```bash
+gcloud storage buckets create gs://gcp-telemetry-platform-tfstate \
+  --location=europe-west3 --uniform-bucket-level-access --public-access-prevention
+gcloud storage buckets update gs://gcp-telemetry-platform-tfstate --versioning
+```
+
+`terraform init` then uses the GCS backend automatically. Storage cost for the ~25 KB state file is effectively zero.
+
 ### Teardown (demo-at-rest)
 
 ```bash
