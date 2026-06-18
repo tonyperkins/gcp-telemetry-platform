@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/tonyperkins/gcp-telemetry-platform/internal/data"
 	"github.com/tonyperkins/gcp-telemetry-platform/internal/services"
@@ -67,8 +66,8 @@ func (h *WorkerHandlers) HandleFlightPush(w http.ResponseWriter, r *http.Request
 			http.Error(w, "Push endpoint not configured", http.StatusNotImplemented)
 			return
 		}
-		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
+		expected := "Bearer " + token
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte(expected)) != 1 {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

@@ -82,17 +82,23 @@ func (s *FlightIngestionService) SaveExternal(ctx context.Context, vehicles []da
 	if len(vehicles) == 0 {
 		return 0, nil
 	}
-	now := time.Now().UTC()
+	vehicles = normalizeFlights(vehicles, time.Now().UTC())
+	if err := s.repo.SaveVehicles(ctx, vehicles); err != nil {
+		return 0, err
+	}
+	return len(vehicles), nil
+}
+
+// normalizeFlights forces the source to "flight" and fills any missing ingest
+// timestamps, so externally pushed data matches the platform's schema.
+func normalizeFlights(vehicles []data.Vehicle, now time.Time) []data.Vehicle {
 	for i := range vehicles {
 		vehicles[i].Source = "flight"
 		if vehicles[i].IngestedAt.IsZero() {
 			vehicles[i].IngestedAt = now
 		}
 	}
-	if err := s.repo.SaveVehicles(ctx, vehicles); err != nil {
-		return 0, err
-	}
-	return len(vehicles), nil
+	return vehicles
 }
 
 func (s *FlightIngestionService) fetchOpenSky(ctx context.Context, bboxConfig string) ([]data.Vehicle, error) {
