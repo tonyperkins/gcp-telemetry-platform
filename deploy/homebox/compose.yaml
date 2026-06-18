@@ -3,7 +3,7 @@ services:
     build:
       # Build context is the repo root so the Go module is available.
       context: ../..
-      dockerfile: Dockerfile.pusher
+      dockerfile: deploy/homebox/Dockerfile.pusher
     image: gcp-telemetry-flightpusher:latest
     container_name: flightpusher
     restart: unless-stopped
