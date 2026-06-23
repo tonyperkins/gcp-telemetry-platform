@@ -2,7 +2,7 @@ import L from 'leaflet';
 import { useEffect, useMemo, useState } from 'react';
 import { MapContainer, TileLayer, useMap, useMapEvent } from 'react-leaflet';
 import { BusStop } from '../hooks/useBusStops';
-import { RouteShape, Vehicle } from '../types/vehicle';
+import { PathPoint, RouteShape, Vehicle } from '../types/vehicle';
 import { getRouteColor } from '../utils/routeColors';
 import { AirportMarker } from './AirportMarker';
 import { BusStopsLayer } from './BusStopsLayer';
@@ -11,17 +11,11 @@ import { FlightTrailPolyline } from './FlightTrailPolyline';
 import { RouteLine } from './RouteLine';
 import { VehicleMarker } from './VehicleMarker';
 
-interface TrailPoint {
-  latitude: number;
-  longitude: number;
-  timestamp: number;
-}
-
 interface Props {
   vehicles:     Vehicle[];
   routeShapes:  Map<string, RouteShape>;
   busStops:     BusStop[];
-  flightTrails: Record<string, TrailPoint[]>;
+  flightTrails: Record<string, PathPoint[]>;
   flightEnabled: boolean;
   showBusStops: boolean;
   showBusRoutes: boolean;

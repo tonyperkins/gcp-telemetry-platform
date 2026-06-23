@@ -1,14 +1,9 @@
 import { Polyline } from 'react-leaflet';
-
-interface TrailPoint {
-  latitude: number;
-  longitude: number;
-  timestamp: number;
-}
+import { PathPoint } from '../types/vehicle';
 
 interface Props {
   vehicleId: string;
-  points: TrailPoint[];
+  points: PathPoint[];
 }
 
 export function FlightTrailPolyline({ vehicleId, points }: Props) {

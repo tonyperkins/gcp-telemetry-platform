@@ -157,6 +157,77 @@ func (r *FirestoreRepository) GetUniqueRoutes(ctx context.Context, source string
 	return routes, nil
 }
 
+// VehiclePathGroup is a grouped set of path points for a single vehicle,
+// used by the /api/vehicles/paths endpoint to pre-seed frontend trails.
+type VehiclePathGroup struct {
+	VehicleID string      `json:"vehicleId"`
+	Points    []PathPoint `json:"points"`
+}
+
+// PathPoint is a single position in a vehicle's historical trail.
+type PathPoint struct {
+	Latitude   float64   `json:"latitude"`
+	Longitude  float64   `json:"longitude"`
+	IngestedAt time.Time `json:"ingestedAt"`
+}
+
+// GetVehiclePaths retrieves historical positions for all vehicles of a given
+// source within the time window, grouped by vehicle_id. Each group's points
+// are sorted oldest-first so the frontend can render a fading trail directly.
+func (r *FirestoreRepository) GetVehiclePaths(ctx context.Context, source string, since time.Time) ([]VehiclePathGroup, error) {
+	q := r.client.Collection(collectionName).
+		Where("source", "==", source).
+		Where("ingested_at", ">=", since).
+		OrderBy("ingested_at", firestore.Asc)
+
+	iter := q.Documents(ctx)
+	groups := make(map[string][]PathPoint)
+
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to iterate documents: %w", err)
+		}
+
+		var v Vehicle
+		if err := doc.DataTo(&v); err != nil {
+			continue
+		}
+
+		if v.VehicleID == "" {
+			continue
+		}
+
+		groups[v.VehicleID] = append(groups[v.VehicleID], PathPoint{
+			Latitude:   v.Latitude,
+			Longitude:  v.Longitude,
+			IngestedAt: v.IngestedAt,
+		})
+	}
+
+	result := make([]VehiclePathGroup, 0, len(groups))
+	for vehicleID, points := range groups {
+		result = append(result, VehiclePathGroup{
+			VehicleID: vehicleID,
+			Points:    points,
+		})
+	}
+
+	log.Printf("GetVehiclePaths (%s since %s): %d vehicles, %d total points",
+		source, since.Format("15:04:05"), len(result), func() int {
+			total := 0
+			for _, g := range result {
+				total += len(g.Points)
+			}
+			return total
+		}())
+
+	return result, nil
+}
+
 // GetVehicleHistory retrieves historical positions for a specific vehicle.
 // Backed by a Firestore composite index on (vehicle_id, ingested_at).
 func (r *FirestoreRepository) GetVehicleHistory(ctx context.Context, vehicleID string, since time.Time) ([]Vehicle, error) {

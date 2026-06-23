@@ -113,6 +113,7 @@ func main() {
 	r.Route("/api/vehicles", func(r chi.Router) {
 		r.Get("/current", apiHandlers.GetActiveVehicles)
 		r.Get("/history", apiHandlers.GetVehicleHistory)
+		r.Get("/paths", apiHandlers.GetVehiclePaths)
 	})
 
 	r.Route("/api/routes", func(r chi.Router) {

@@ -9,7 +9,7 @@ import { SourceFilter } from './components/SourceFilter';
 import { SreSidebar } from './components/SreSidebar';
 import { useApiMetrics } from './hooks/useApiMetrics';
 import { useBusStops } from './hooks/useBusStops';
-import { useFlightTrails } from './hooks/useFlightTrails';
+import { useVehiclePaths } from './hooks/useVehiclePaths';
 import { useRouteShapes } from './hooks/useRouteShapes';
 import { useVehicleData } from './hooks/useVehicleData';
 import { useLocalStorage } from './hooks/useLocalStorage';
@@ -57,7 +57,8 @@ export default function App() {
   });
   const routeShapes  = useRouteShapes();
   const busStops     = useBusStops();
-  const flightTrails = useFlightTrails(vehicles);
+  const vehiclePaths = useVehiclePaths(vehicles);
+  const flightTrails = Object.fromEntries(vehiclePaths);
 
   // No initial route hiding — show all routes by default.
   // The routeShapes GTFS file only has 71 routes, but vehicles can have 198+,

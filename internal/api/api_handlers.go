@@ -92,6 +92,44 @@ func (h *ApiHandlers) GetVehicleHistory(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(history)
 }
 
+// GetVehiclePaths returns historical position trails for all vehicles of a
+// given source within a time window, grouped by vehicle_id.
+// Serves `GET /api/vehicles/paths?source={source}&minutes={minutes}`
+func (h *ApiHandlers) GetVehiclePaths(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	source := r.URL.Query().Get("source")
+	if source != "metro" && source != "flight" {
+		http.Error(w, `{"error": "invalid or missing source parameter"}`, http.StatusBadRequest)
+		return
+	}
+
+	minutes := 20
+	if m := r.URL.Query().Get("minutes"); m != "" {
+		if val, err := strconv.Atoi(m); err == nil && val > 0 && val <= 720 {
+			minutes = val
+		}
+	}
+
+	since := time.Now().UTC().Add(-time.Duration(minutes) * time.Minute)
+
+	paths, err := h.repo.GetVehiclePaths(r.Context(), source, since)
+	if err != nil {
+		log.Printf("[API] Error fetching vehicle paths: %v", err)
+		http.Error(w, `{"error": "failed to query paths"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if paths == nil {
+		paths = []data.VehiclePathGroup{}
+	}
+
+	log.Printf("[API] GetVehiclePaths (source=%s, minutes=%d) returning %d vehicle trails",
+		source, minutes, len(paths))
+
+	json.NewEncoder(w).Encode(paths)
+}
+
 // GetHealth returns a robust mock health status object for the dashboard
 func (h *ApiHandlers) GetHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
