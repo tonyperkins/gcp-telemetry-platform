@@ -174,11 +174,14 @@ type PathPoint struct {
 // GetVehiclePaths retrieves historical positions for all vehicles of a given
 // source within the time window, grouped by vehicle_id. Each group's points
 // are sorted oldest-first so the frontend can render a fading trail directly.
+//
+// Uses the existing DESC composite index (same as GetRecentVehicles) and
+// reverses each group's points in memory to produce oldest-first order.
 func (r *FirestoreRepository) GetVehiclePaths(ctx context.Context, source string, since time.Time) ([]VehiclePathGroup, error) {
 	q := r.client.Collection(collectionName).
 		Where("source", "==", source).
 		Where("ingested_at", ">=", since).
-		OrderBy("ingested_at", firestore.Asc)
+		OrderBy("ingested_at", firestore.Desc)
 
 	iter := q.Documents(ctx)
 	groups := make(map[string][]PathPoint)
@@ -201,11 +204,12 @@ func (r *FirestoreRepository) GetVehiclePaths(ctx context.Context, source string
 			continue
 		}
 
-		groups[v.VehicleID] = append(groups[v.VehicleID], PathPoint{
+		// Prepend to get oldest-first order from DESC results
+		groups[v.VehicleID] = append([]PathPoint{{
 			Latitude:   v.Latitude,
 			Longitude:  v.Longitude,
 			IngestedAt: v.IngestedAt,
-		})
+		}}, groups[v.VehicleID]...)
 	}
 
 	result := make([]VehiclePathGroup, 0, len(groups))
