@@ -56,6 +56,7 @@ Designed to cost **a few dollars a month or less**:
 - **Metro polling** runs every 2 minutes (`metro_polling_cron`), keeping Cloud Run invocations and Firestore writes inside the free tier.
 - **Firestore** documents carry a 24h TTL (`expire_at` field), so the append-only `vehicles` collection self-prunes and storage stays in the free tier.
 - **No always-on networking** (VPC connector / Cloud NAT / static IP removed) — this was the single largest line item.
+- **Artifact Registry** has a cleanup policy (keep 5 most recent images, delete older) set by `infra/bootstrap-cicd.sh`, so old deploy images never accumulate.
 
 | State | Approx. monthly cost |
 |---|---|

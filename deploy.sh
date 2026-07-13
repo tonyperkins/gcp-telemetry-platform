@@ -22,6 +22,8 @@ gcloud services enable \
     --project=$PROJECT_ID
 
 echo "2️⃣ Checking if Artifact Registry repository exists..."
+# bootstrap-cicd.sh creates the repo with a cleanup policy (keep last 5 images).
+# This fallback handles the case where deploy.sh is run without bootstrap.
 if ! gcloud artifacts repositories describe $REPO_NAME --location=$REGION --project=$PROJECT_ID > /dev/null 2>&1; then
     echo "Creating Docker repository: $REPO_NAME..."
     gcloud artifacts repositories create $REPO_NAME \

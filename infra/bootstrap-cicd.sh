@@ -29,7 +29,7 @@ SCHEDULER_SA="telemetry-scheduler-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 
 POOL_RES="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}"
 
-echo "1/6 Enabling required APIs..."
+echo "1/7 Enabling required APIs..."
 # cloudresourcemanager is required for Terraform to read/manage project IAM
 # policy under the CI service-account identity.
 gcloud services enable \
@@ -39,7 +39,7 @@ gcloud services enable \
     cloudresourcemanager.googleapis.com \
     --project="$PROJECT_ID"
 
-echo "2/6 Creating service accounts (idempotent)..."
+echo "2/7 Creating service accounts (idempotent)..."
 gcloud iam service-accounts describe "$PLANNER_SA" --project="$PROJECT_ID" >/dev/null 2>&1 || \
     gcloud iam service-accounts create gh-planner --project="$PROJECT_ID" \
         --display-name="GitHub Actions - read-only planner (PRs)"
@@ -47,13 +47,13 @@ gcloud iam service-accounts describe "$DEPLOYER_SA" --project="$PROJECT_ID" >/de
     gcloud iam service-accounts create gh-deployer --project="$PROJECT_ID" \
         --display-name="GitHub Actions - deployer (main only)"
 
-echo "3/6 Granting PLANNER read-only roles..."
+echo "3/7 Granting PLANNER read-only roles..."
 for role in roles/viewer roles/secretmanager.viewer; do
     gcloud projects add-iam-policy-binding "$PROJECT_ID" \
         --member="serviceAccount:${PLANNER_SA}" --role="$role" --condition=None >/dev/null
 done
 
-echo "4/6 Granting DEPLOYER curated (non-escalating) roles..."
+echo "4/7 Granting DEPLOYER curated (non-escalating) roles..."
 # Deliberately excludes projectIamAdmin / serviceAccountAdmin / secretmanager.admin:
 # the IAM bindings, service accounts and secrets are managed out-of-band, so a
 # normal image deploy never needs to modify them. iam.securityReviewer grants
@@ -85,7 +85,7 @@ for sa in "$CLOUDRUN_SA" "$SCHEDULER_SA"; do
         --member="serviceAccount:${DEPLOYER_SA}" --role="roles/iam.serviceAccountUser" >/dev/null
 done
 
-echo "5/6 Creating Workload Identity pool + provider (locked to ${REPO})..."
+echo "5/7 Creating Workload Identity pool + provider (locked to ${REPO})..."
 gcloud iam workload-identity-pools describe "$POOL" --project="$PROJECT_ID" --location=global >/dev/null 2>&1 || \
     gcloud iam workload-identity-pools create "$POOL" --project="$PROJECT_ID" --location=global \
         --display-name="GitHub Actions pool"
@@ -99,7 +99,39 @@ gcloud iam workload-identity-pools providers describe "$PROVIDER" \
         --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" \
         --attribute-condition="assertion.repository == '${REPO}'"
 
-echo "6/6 Binding repo identities to the service accounts..."
+echo "6/7 Creating Artifact Registry repo with cleanup policy..."
+AR_REPO="telemetry-repo"
+if ! gcloud artifacts repositories describe "$AR_REPO" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud artifacts repositories create "$AR_REPO" \
+        --repository-format=docker \
+        --location="$REGION" \
+        --description="Docker repository for Telemetry Platform" \
+        --project="$PROJECT_ID"
+else
+    echo "Repository $AR_REPO already exists."
+fi
+# Keep the 5 most recent images; delete older ones automatically.
+# The Keep policy protects the 5 newest versions; the Delete policy removes
+# everything older than 1 day that isn't protected by the keep policy.
+# GCP evaluates the policies on a recurring basis (changes take ~1 day).
+gcloud artifacts repositories set-cleanup-policies "$AR_REPO" \
+    --location="$REGION" --project="$PROJECT_ID" --no-dry-run \
+    --policy=- <<'EOF'
+[
+  {
+    "name": "keep-recent",
+    "action": { "type": "Keep" },
+    "mostRecentVersions": { "keepCount": 5 }
+  },
+  {
+    "name": "delete-old",
+    "action": { "type": "Delete" },
+    "condition": { "olderThan": "1d" }
+  }
+]
+EOF
+
+echo "7/7 Binding repo identities to the service accounts..."
 # Planner: any ref in the repo (so PRs from branches can plan).
 gcloud iam service-accounts add-iam-policy-binding "$PLANNER_SA" --project="$PROJECT_ID" \
     --role="roles/iam.workloadIdentityUser" \
