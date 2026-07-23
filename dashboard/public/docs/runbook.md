@@ -26,10 +26,10 @@ sequenceDiagram
 
     SRE->>DASH: Clicks "Resume Ingestion Loop"
     DASH->>RUN: POST /api/manage/start
-    RUN->>SCHED: ResumeJob(metro + flight)
+    RUN->>SCHED: ResumeJob(metro)
 ```
 
-**Last updated:** 2026-04
+**Last updated:** 2026-07
 **Owner:** Platform SRE
 **Scope:** Production incident response for all components
 
@@ -227,7 +227,7 @@ gcloud scheduler jobs pause metro-ingester --location "$REGION"
 
 ### Deploy / redeploy
 
-Deployments build a new image (timestamp-tagged) via Cloud Build and apply Terraform:
+Deployments build a new image (timestamp-tagged) and apply Terraform. The primary path is CI/CD (GitHub Actions → Artifact Registry → Terraform apply); `deploy.sh` uses Cloud Build as a local/break-glass alternative:
 
 ```bash
 ./deploy.sh

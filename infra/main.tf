@@ -5,7 +5,7 @@ terraform {
       version = "~> 5.0"
     }
   }
-  # Note: Add remote backend (GCS) before applying to production
+  # Remote state backend is configured in backend.tf (GCS bucket).
 }
 
 provider "google" {
@@ -172,7 +172,10 @@ resource "google_cloud_run_v2_service" "telemetry_api" {
   }
 }
 
-# Make the Cloud Run service publicly accessible
+# The Cloud Run service is publicly accessible (allUsers) so the dashboard
+# SPA and read-only API can be reached without authentication. Write endpoints
+# (/ingest/*, /api/manage/start|stop) have their own auth guards (OIDC header,
+# bearer tokens) enforced in the application code.
 resource "google_cloud_run_service_iam_member" "public" {
   location = google_cloud_run_v2_service.telemetry_api.location
   project  = google_cloud_run_v2_service.telemetry_api.project

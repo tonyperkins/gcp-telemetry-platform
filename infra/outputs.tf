@@ -4,9 +4,11 @@ output "service_url" {
 }
 
 output "project_id" {
-  value = var.project_id
+  value       = var.project_id
+  description = "The GCP project ID"
 }
 
 output "region" {
-  value = var.region
+  value       = var.region
+  description = "The GCP region resources were deployed to"
 }

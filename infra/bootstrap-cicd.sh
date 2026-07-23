@@ -142,7 +142,12 @@ gcloud iam service-accounts add-iam-policy-binding "$DEPLOYER_SA" --project="$PR
     --member="principalSet://iam.googleapis.com/${POOL_RES}/attribute.ref/refs/heads/main" >/dev/null
 
 echo
-echo "Done. Set these as GitHub repo variables (see infra/bootstrap-cicd.sh footer):"
-echo "  WIF_PROVIDER = ${POOL_RES}/providers/${PROVIDER}"
-echo "  GCP_PLANNER_SA = ${PLANNER_SA}"
+echo "Done. Set these as GitHub repo variables (Settings → Secrets and variables → Actions → Variables):"
+echo
+echo "  WIF_PROVIDER    = ${POOL_RES}/providers/${PROVIDER}"
+echo "  GCP_PLANNER_SA  = ${PLANNER_SA}"
 echo "  GCP_DEPLOYER_SA = ${DEPLOYER_SA}"
+echo "  GCP_PROJECT_ID  = ${PROJECT_ID}"
+echo "  GCP_REGION      = ${REGION}"
+echo "  GCP_AR_REPO     = telemetry-repo"
+echo "  GCP_IMAGE_NAME  = telemetry-app"
