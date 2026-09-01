@@ -3,6 +3,8 @@ package data
 import (
 	"context"
 	"fmt"
+	"math"
+	"sync"
 	"time"
 
 	"log"
@@ -13,42 +15,118 @@ import (
 
 const collectionName = "vehicles"
 
+// vehicleState is the quantized last-written signature for a vehicle, used to
+// skip redundant writes (see SaveVehicles).
+type vehicleState struct {
+	signature string
+	updatedAt time.Time
+}
+
 // FirestoreRepository handles data persistence to GCP Firestore.
 type FirestoreRepository struct {
 	client *firestore.Client
+
+	// In-memory dedup state. Safe because polling is single-instance in
+	// practice (1 req / 5 min never scales past one Cloud Run instance); on a
+	// cold start the cache is empty and one full write cycle occurs.
+	mu          sync.Mutex
+	lastWritten map[string]vehicleState
 }
 
 // NewFirestoreRepository creates a new instance.
 func NewFirestoreRepository(client *firestore.Client) *FirestoreRepository {
 	return &FirestoreRepository{
-		client: client,
+		client:      client,
+		lastWritten: make(map[string]vehicleState),
 	}
 }
 
-// SaveVehicles uses Firestore Batch write to insert multiple telemetry points at once.
+// vehicleSignature quantizes a vehicle's position and speed into a comparable
+// string. Coordinates are rounded to 3 decimals (~111 m) to absorb GPS jitter,
+// speed to the nearest 5 km/h. Heading is intentionally excluded: it is noisy
+// at low speeds, and any vehicle whose heading changes meaningfully is moving
+// and therefore changes position too.
+func vehicleSignature(v Vehicle) (string, bool) {
+	if v.VehicleID == "" {
+		return "", false
+	}
+	lat := math.Round(v.Latitude*1000) / 1000
+	lng := math.Round(v.Longitude*1000) / 1000
+	speed := 0.0
+	if v.SpeedKmh != nil {
+		speed = math.Round(*v.SpeedKmh/5) * 5
+	}
+	return fmt.Sprintf("%.3f|%.3f|%.0f", lat, lng, speed), true
+}
+
+// shouldWrite reports whether the vehicle's state changed enough to warrant a
+// new document, and records the new state when it does. Caller must hold r.mu.
+func (r *FirestoreRepository) shouldWrite(v Vehicle, now time.Time) bool {
+	sig, ok := vehicleSignature(v)
+	if !ok {
+		return true // no vehicle ID: always write (read path skips these anyway)
+	}
+	if prev, exists := r.lastWritten[v.VehicleID]; exists && prev.signature == sig {
+		prev.updatedAt = now
+		r.lastWritten[v.VehicleID] = prev
+		return false
+	}
+	r.lastWritten[v.VehicleID] = vehicleState{signature: sig, updatedAt: now}
+	return true
+}
+
+// pruneDedupState drops vehicles not seen in 24h so retired buses/flights
+// don't accumulate. Caller must hold r.mu.
+func (r *FirestoreRepository) pruneDedupState(now time.Time) {
+	cutoff := now.Add(-24 * time.Hour)
+	for id, st := range r.lastWritten {
+		if st.updatedAt.Before(cutoff) {
+			delete(r.lastWritten, id)
+		}
+	}
+}
+
+// SaveVehicles uses Firestore Batch write to insert multiple telemetry points
+// at once. Vehicles whose quantized position/speed is unchanged since the last
+// write are skipped: the feed reports every vehicle (including hundreds of
+// stationary buses) on every poll, and writing them all verbatim dominated the
+// Firestore bill (~15K docs/hour). Moving vehicles always produce new points.
 func (r *FirestoreRepository) SaveVehicles(ctx context.Context, vehicles []Vehicle) error {
 	if len(vehicles) == 0 {
 		return nil
 	}
 
-	// Firestore limits batches to 500 operations.
-	// In a complete implementation, we'd chunk this if len(vehicles) > 500.
-	// For demo sizing, it's typically fine.
+	now := time.Now().UTC()
+
+	// Firestore limits batches to 500 operations. Dedup only shrinks the
+	// batch, so a single pass is safe for demo-scale feeds.
 	batch := r.client.Batch()
 	col := r.client.Collection(collectionName)
 
+	r.mu.Lock()
+	r.pruneDedupState(now)
+	written := 0
 	for _, v := range vehicles {
+		if !r.shouldWrite(v, now) {
+			continue
+		}
 		// Use auto-generated document IDs for time-series append-only logging
 		docRef := col.NewDoc()
 		v.ID = docRef.ID
 		if v.IngestedAt.IsZero() {
-			v.IngestedAt = time.Now().UTC()
+			v.IngestedAt = now
 		}
 		// Drive the Firestore TTL policy: expire 24h after ingestion, safely
 		// beyond the 12h history read window. Firestore reclaims the storage
-		// for free, keeping this append-only collection in the free tier.
+		// for free, keeping this append-only collection from growing unbounded.
 		v.ExpireAt = v.IngestedAt.Add(24 * time.Hour)
 		batch.Set(docRef, v)
+		written++
+	}
+	r.mu.Unlock()
+
+	if written == 0 {
+		return nil
 	}
 
 	_, err := batch.Commit(ctx)
@@ -56,6 +134,7 @@ func (r *FirestoreRepository) SaveVehicles(ctx context.Context, vehicles []Vehic
 		return fmt.Errorf("failed to commit vehicle batch: %w", err)
 	}
 
+	log.Printf("SaveVehicles: wrote %d/%d vehicles (%d skipped as unchanged)", written, len(vehicles), len(vehicles)-written)
 	return nil
 }
 

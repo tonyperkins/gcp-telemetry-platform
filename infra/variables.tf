@@ -27,6 +27,6 @@ variable "opensky_bbox" {
 
 variable "metro_polling_cron" {
   type        = string
-  description = "Cron expression for the Metro GTFS-RT poll (Cloud Scheduler). Default every 2 min keeps Cloud Run invocations and Firestore writes within the free tier."
-  default     = "*/2 * * * *"
+  description = "Cron expression for the Metro GTFS-RT poll (Cloud Scheduler). Every 5 min plus position-change dedup keeps Firestore writes (~the dominant cost) low; every 2 min costs ~$16/mo in document writes."
+  default     = "*/5 * * * *"
 }

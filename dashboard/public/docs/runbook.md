@@ -77,7 +77,7 @@ sequenceDiagram
 
 > [!NOTE]
 > **Telemetry Window Discrepancy**
-> There is a deliberate polling window discrepancy separating the data retrieval endpoints. `GetActiveVehicles` (used by the dashboard map) operates on a strict **5m window** to avoid plotting stale ghost positions. In contrast, the source health monitor uses a padded **10m window** for OpenSky. This intentional buffer prevents SRE dashboard noise and false-positive pipeline teardowns caused by brief upstream provider latency, Cloud Run cold starts, or expected sub-minute schedule gaps.
+> There is a deliberate polling window discrepancy separating the data retrieval endpoints. `GetActiveVehicles` (used by the dashboard map) operates on a **12m window** — comfortably above the 5-min ingest interval so a query landing just before the next poll never drops vehicles. In contrast, the source health monitor uses a padded **10m window** for OpenSky. This intentional buffer prevents SRE dashboard noise and false-positive pipeline teardowns caused by brief upstream provider latency, Cloud Run cold starts, or expected sub-minute schedule gaps.
 
 ### Quick status commands
 
