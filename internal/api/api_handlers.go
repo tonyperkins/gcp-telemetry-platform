@@ -37,7 +37,7 @@ func (h *ApiHandlers) GetActiveVehicles(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	since := time.Now().UTC().Add(-5 * time.Minute)
+	since := time.Now().UTC().Add(-12 * time.Minute)
 	var allVehicles []data.Vehicle
 
 	if source == "" || source == "metro" {
@@ -96,7 +96,9 @@ func (h *ApiHandlers) GetVehicleHistory(w http.ResponseWriter, r *http.Request) 
 func (h *ApiHandlers) GetHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	since := time.Now().UTC().Add(-5 * time.Minute)
+	// 12 min: comfortably above the 5-min poll interval so a query landing
+	// just before the next ingest never reports healthy sources as stale.
+	since := time.Now().UTC().Add(-12 * time.Minute)
 
 	metro, _ := h.repo.GetRecentVehicles(r.Context(), "metro", since)
 	flight, _ := h.repo.GetRecentVehicles(r.Context(), "flight", since)

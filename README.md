@@ -53,14 +53,14 @@ Resources deploy to **`europe-west3` (Frankfurt)**, set in `deploy.sh`/`destroy.
 Designed to cost **a few dollars a month or less**:
 
 - **Cloud Run** scales to zero (`min_instance_count = 0`, `cpu_idle = true`) and is capped at 2 instances, so there is no idle compute charge and no runaway-bill risk.
-- **Metro polling** runs every 2 minutes (`metro_polling_cron`), keeping Cloud Run invocations and Firestore writes inside the free tier.
+- **Firestore writes are the dominant cost driver** and are actively managed: the metro poll runs every 5 minutes (`metro_polling_cron`), and `SaveVehicles` skips vehicles whose quantized position/speed is unchanged since the last write (stationary buses and parked aircraft otherwise dominate the feed — writing them all verbatim cost ~$16/mo). Expect **~$3–5/mo** at current Austin traffic levels.
 - **Firestore** documents carry a 24h TTL (`expire_at` field), so the append-only `vehicles` collection self-prunes and storage stays in the free tier.
 - **No always-on networking** (VPC connector / Cloud NAT / static IP removed) — this was the single largest line item.
 - **Artifact Registry** has a cleanup policy (keep 5 most recent images, delete older) set by `infra/bootstrap-cicd.sh`, so old deploy images never accumulate.
 
 | State | Approx. monthly cost |
 |---|---|
-| Deployed and running | ~$0–2 (largely free tier) |
+| Deployed and running | ~$3–5 (Firestore writes dominate; see above) |
 | Torn down via `destroy.sh` | < $0.10 (Firestore data + secrets at rest) |
 
 ---
@@ -136,7 +136,7 @@ OpenSky's API host silently drops TCP connections from the Cloud Run egress IP (
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health`, `/api/health` | Liveness / aggregate source health |
-| GET | `/api/vehicles/current?source={metro\|flight}` | Active vehicles (5-min window) |
+| GET | `/api/vehicles/current?source={metro\|flight}` | Active vehicles (12-min window) |
 | GET | `/api/vehicles/history?id={vehicleId}` | Vehicle path (12-hour window) |
 | GET | `/api/routes/` | GTFS route shapes |
 | GET | `/api/routes/stops/all` | Bus stops |
@@ -282,7 +282,7 @@ After running `infra/bootstrap-cicd.sh`, set these in **GitHub → Settings → 
 | `region` | `us-central1` | `deploy.sh` sets `europe-west3` / `TF_VAR_region` |
 | `image_url` | _(required)_ | `deploy.sh` / `TF_VAR_image_url` |
 | `opensky_bbox` | `29.8,-98.2,30.8,-97.2` (Austin) | `TF_VAR_opensky_bbox` |
-| `metro_polling_cron` | `*/2 * * * *` (every 2 min) | `TF_VAR_metro_polling_cron` |
+| `metro_polling_cron` | `*/5 * * * *` (every 5 min) | `TF_VAR_metro_polling_cron` |
 
 ### Local / break-glass deploy
 
